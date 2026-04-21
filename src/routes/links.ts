@@ -58,6 +58,7 @@ export default async function linksRoutes(app: FastifyInstance) {
         return reply.status(403).send({ error: 'forbidden' });
       }
 
+      await app.db.delete(visits).where(eq(visits.linkId, id));
       await app.db.delete(links).where(eq(links.id, id));
       await app.redis.del(`link:${link.shortCode}`);
 
