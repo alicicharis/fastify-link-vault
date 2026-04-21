@@ -1,10 +1,93 @@
 import { FastifyInstance } from 'fastify';
-import { eq } from 'drizzle-orm';
-import { links } from '../db/schema';
-import { createLinkBody } from '../schemas/links.schema';
+import { eq, sql } from 'drizzle-orm';
+import { links, visits } from '../db/schema';
+import { createLinkBody, listLinksResponse } from '../schemas/links.schema';
 import { generateShortCode } from '../utils/shortcode';
+import { getStats } from '../services/analytics.service';
 
 export default async function linksRoutes(app: FastifyInstance) {
+  app.get('/', {
+    schema: { response: { 200: listLinksResponse } },
+    preHandler: app.authenticate,
+    handler: async (request, reply) => {
+      const result = await app.db
+        .select({
+          id: links.id,
+          shortCode: links.shortCode,
+          originalUrl: links.originalUrl,
+          createdAt: links.createdAt,
+          clickCount: sql<number>`cast(count(${visits.id}) as int)`,
+        })
+        .from(links)
+        .leftJoin(visits, eq(visits.linkId, links.id))
+        .where(eq(links.userId, request.user.userId))
+        .groupBy(links.id);
+
+      return reply.send(
+        result.map((row) => ({
+          id: row.id,
+          short_code: row.shortCode,
+          short_url: `${app.config.BASE_URL}/${row.shortCode}`,
+          original_url: row.originalUrl,
+          created_at: row.createdAt,
+          click_count: row.clickCount,
+        })),
+      );
+    },
+  });
+
+  app.delete('/:id', {
+    preHandler: app.authenticate,
+    handler: async (request, reply) => {
+      const { id } = request.params as { id: string };
+
+      const result = await app.db
+        .select()
+        .from(links)
+        .where(eq(links.id, id))
+        .limit(1);
+
+      if (result.length === 0) {
+        return reply.status(404).send({ error: 'not_found' });
+      }
+
+      const link = result[0]!;
+
+      if (link.userId !== request.user.userId) {
+        return reply.status(403).send({ error: 'forbidden' });
+      }
+
+      await app.db.delete(links).where(eq(links.id, id));
+      await app.redis.del(`link:${link.shortCode}`);
+
+      return reply.status(204).send();
+    },
+  });
+
+  app.get('/:id/stats', {
+    preHandler: app.authenticate,
+    handler: async (request, reply) => {
+      const { id } = request.params as { id: string };
+
+      const result = await app.db
+        .select()
+        .from(links)
+        .where(eq(links.id, id))
+        .limit(1);
+
+      if (result.length === 0) {
+        return reply.status(404).send({ error: 'not_found' });
+      }
+
+      if (result[0]!.userId !== request.user.userId) {
+        return reply.status(403).send({ error: 'forbidden' });
+      }
+
+      const stats = await getStats(app, id);
+      return reply.send(stats);
+    },
+  });
+
   app.post('/', {
     schema: { body: createLinkBody },
     preHandler: app.authenticate,
