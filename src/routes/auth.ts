@@ -15,7 +15,10 @@ const bodySchema = {
 };
 
 export default async function authRoutes(app: FastifyInstance) {
-  const authRateLimiter = async (request: FastifyRequest, reply: FastifyReply) => {
+  const authRateLimiter = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) => {
     const ip = request.ip;
     const limiter = createRateLimiter(app.redis, `rate:auth:${ip}`, 10, 60);
     const { allowed, retryAfter } = await limiter();
@@ -27,11 +30,36 @@ export default async function authRoutes(app: FastifyInstance) {
     }
   };
 
+  const tokenResponse = {
+    type: 'object',
+    properties: { token: { type: 'string' } },
+  };
+
+  const errorResponse = {
+    type: 'object',
+    properties: { error: { type: 'string' } },
+  };
+
   app.post(
     '/register',
-    { schema: { body: bodySchema }, preHandler: authRateLimiter },
+    {
+      schema: {
+        tags: ['Auth'],
+        body: bodySchema,
+        response: {
+          201: tokenResponse,
+          409: errorResponse,
+          429: errorResponse,
+          500: errorResponse,
+        },
+      },
+      preHandler: authRateLimiter,
+    },
     async (request, reply) => {
-      const { email, password } = request.body as { email: string; password: string };
+      const { email, password } = request.body as {
+        email: string;
+        password: string;
+      };
 
       const existing = await app.db
         .select()
@@ -58,9 +86,23 @@ export default async function authRoutes(app: FastifyInstance) {
 
   app.post(
     '/login',
-    { schema: { body: bodySchema }, preHandler: authRateLimiter },
+    {
+      schema: {
+        tags: ['Auth'],
+        body: bodySchema,
+        response: {
+          200: tokenResponse,
+          401: errorResponse,
+          429: errorResponse,
+        },
+      },
+      preHandler: authRateLimiter,
+    },
     async (request, reply) => {
-      const { email, password } = request.body as { email: string; password: string };
+      const { email, password } = request.body as {
+        email: string;
+        password: string;
+      };
 
       const [user] = await app.db
         .select()

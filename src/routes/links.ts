@@ -6,9 +6,18 @@ import { generateShortCode } from '../utils/shortcode';
 import { getStats } from '../services/analytics.service';
 import { createRateLimiter } from '../utils/rateLimit';
 
+const errorResponse = {
+  type: 'object',
+  properties: { error: { type: 'string' } },
+};
+
 export default async function linksRoutes(app: FastifyInstance) {
   app.get('/', {
-    schema: { response: { 200: listLinksResponse } },
+    schema: {
+      tags: ['Links'],
+      security: [{ bearerAuth: [] }],
+      response: { 200: listLinksResponse },
+    },
     preHandler: app.authenticate,
     handler: async (request, reply) => {
       const result = await app.db
@@ -38,6 +47,20 @@ export default async function linksRoutes(app: FastifyInstance) {
   });
 
   app.delete('/:id', {
+    schema: {
+      tags: ['Links'],
+      security: [{ bearerAuth: [] }],
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+      response: {
+        204: { type: 'null' },
+        403: errorResponse,
+        404: errorResponse,
+      },
+    },
     preHandler: app.authenticate,
     handler: async (request, reply) => {
       const { id } = request.params as { id: string };
@@ -66,7 +89,51 @@ export default async function linksRoutes(app: FastifyInstance) {
     },
   });
 
+  const statsResponse = {
+    type: 'object',
+    properties: {
+      total_clicks: { type: 'number' },
+      clicks_per_day: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: { date: { type: 'string' }, count: { type: 'number' } },
+        },
+      },
+      top_countries: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            country: { type: 'string', nullable: true },
+            count: { type: 'number' },
+          },
+        },
+      },
+      top_referrers: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            referrer: { type: 'string', nullable: true },
+            count: { type: 'number' },
+          },
+        },
+      },
+    },
+  };
+
   app.get('/:id/stats', {
+    schema: {
+      tags: ['Links'],
+      security: [{ bearerAuth: [] }],
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+      response: { 200: statsResponse, 403: errorResponse, 404: errorResponse },
+    },
     preHandler: app.authenticate,
     handler: async (request, reply) => {
       const { id } = request.params as { id: string };
@@ -90,9 +157,17 @@ export default async function linksRoutes(app: FastifyInstance) {
     },
   });
 
-  const linksCreateRateLimiter = async (request: FastifyRequest, reply: FastifyReply) => {
+  const linksCreateRateLimiter = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) => {
     const ip = request.ip;
-    const limiter = createRateLimiter(app.redis, `rate:links:create:${ip}`, 30, 60);
+    const limiter = createRateLimiter(
+      app.redis,
+      `rate:links:create:${ip}`,
+      30,
+      60,
+    );
     const { allowed, retryAfter } = await limiter();
     if (!allowed) {
       return reply
@@ -102,8 +177,28 @@ export default async function linksRoutes(app: FastifyInstance) {
     }
   };
 
+  const createLinkResponse = {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      short_code: { type: 'string' },
+      short_url: { type: 'string' },
+      original_url: { type: 'string' },
+      created_at: { type: 'string' },
+    },
+  };
+
   app.post('/', {
-    schema: { body: createLinkBody },
+    schema: {
+      tags: ['Links'],
+      security: [{ bearerAuth: [] }],
+      body: createLinkBody,
+      response: {
+        201: createLinkResponse,
+        429: errorResponse,
+        500: errorResponse,
+      },
+    },
     preHandler: [app.authenticate, linksCreateRateLimiter],
     handler: async (request, reply) => {
       const body = request.body as {
