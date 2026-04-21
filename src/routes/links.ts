@@ -1,9 +1,10 @@
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { eq, sql } from 'drizzle-orm';
 import { links, visits } from '../db/schema';
 import { createLinkBody, listLinksResponse } from '../schemas/links.schema';
 import { generateShortCode } from '../utils/shortcode';
 import { getStats } from '../services/analytics.service';
+import { createRateLimiter } from '../utils/rateLimit';
 
 export default async function linksRoutes(app: FastifyInstance) {
   app.get('/', {
@@ -88,9 +89,21 @@ export default async function linksRoutes(app: FastifyInstance) {
     },
   });
 
+  const linksCreateRateLimiter = async (request: FastifyRequest, reply: FastifyReply) => {
+    const ip = request.ip;
+    const limiter = createRateLimiter(app.redis, `rate:links:create:${ip}`, 30, 60);
+    const { allowed, retryAfter } = await limiter();
+    if (!allowed) {
+      return reply
+        .code(429)
+        .header('Retry-After', String(retryAfter))
+        .send({ error: 'too_many_requests' });
+    }
+  };
+
   app.post('/', {
     schema: { body: createLinkBody },
-    preHandler: app.authenticate,
+    preHandler: [app.authenticate, linksCreateRateLimiter],
     handler: async (request, reply) => {
       const body = request.body as {
         original_url: string;

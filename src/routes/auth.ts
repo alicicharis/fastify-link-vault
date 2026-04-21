@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import bcrypt from 'bcrypt';
 import { eq } from 'drizzle-orm';
 import { users } from '../db/schema';
+import { createRateLimiter } from '../utils/rateLimit';
 
 const bodySchema = {
   type: 'object',
@@ -14,14 +15,23 @@ const bodySchema = {
 };
 
 export default async function authRoutes(app: FastifyInstance) {
+  const authRateLimiter = async (request: FastifyRequest, reply: FastifyReply) => {
+    const ip = request.ip;
+    const limiter = createRateLimiter(app.redis, `rate:auth:${ip}`, 10, 60);
+    const { allowed, retryAfter } = await limiter();
+    if (!allowed) {
+      return reply
+        .code(429)
+        .header('Retry-After', String(retryAfter))
+        .send({ error: 'too_many_requests' });
+    }
+  };
+
   app.post(
     '/register',
-    { schema: { body: bodySchema } },
-    async (
-      request: FastifyRequest<{ Body: { email: string; password: string } }>,
-      reply: FastifyReply,
-    ) => {
-      const { email, password } = request.body;
+    { schema: { body: bodySchema }, preHandler: authRateLimiter },
+    async (request, reply) => {
+      const { email, password } = request.body as { email: string; password: string };
 
       const existing = await app.db
         .select()
@@ -48,12 +58,9 @@ export default async function authRoutes(app: FastifyInstance) {
 
   app.post(
     '/login',
-    { schema: { body: bodySchema } },
-    async (
-      request: FastifyRequest<{ Body: { email: string; password: string } }>,
-      reply: FastifyReply,
-    ) => {
-      const { email, password } = request.body;
+    { schema: { body: bodySchema }, preHandler: authRateLimiter },
+    async (request, reply) => {
+      const { email, password } = request.body as { email: string; password: string };
 
       const [user] = await app.db
         .select()
